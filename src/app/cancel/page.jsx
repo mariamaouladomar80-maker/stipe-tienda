@@ -1,6 +1,17 @@
 import Link from 'next/link'
+import { supabase } from '@/lib/supabase'
 
-export default function CancelPage() {
+export default async function CancelPage({ searchParams }) {
+  const pedidoId = searchParams?.pedido_id
+
+  if (pedidoId) {
+    // Opcional: marcar como cancelado en la base de datos
+    await supabase
+      .from('pedidos')
+      .update({ estado_pago: 'cancelado' })
+      .eq('id', pedidoId)
+  }
+
   return (
     <main className="min-h-screen flex items-center justify-center p-5">
       <div className="bg-white rounded-2xl p-10 max-w-md w-full shadow-lg text-center">

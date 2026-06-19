@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import Stripe from 'stripe'
+import { supabase } from '@/lib/supabase'
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
   apiVersion: '2023-10-16',
@@ -8,8 +9,7 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
 const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET
 
 export async function POST(request) {
-  const payload = await request.text() // Lee el cuerpo de la petición como texto plano (string).¿Por qué .text() y no .json()? Porque Stripe envía el payload como texto plano, y necesitamos ese texto exacto para verificar la firma. Si lo convirtiéramos a JSON primero, perderíamos el formato original y la firma no coincidiría.
-  
+  const payload = await request.text()
   const signature = request.headers.get('stripe-signature')
 
   let event
@@ -27,20 +27,50 @@ export async function POST(request) {
   switch (event.type) {
     case 'checkout.session.completed': {
       const session = event.data.object
-      
-      const customerEmail = session.customer_details?.email || session.customer_email || 'No disponible'
-      const amountTotal = session.amount_total ? (session.amount_total / 100).toFixed(2) : '0.00'
-      const currency = session.currency?.toUpperCase() || 'EUR'
+      const pedidoId = session.metadata?.pedido_id
 
-      console.log('✅ PAGO COMPLETADO')
-      console.log(`📧 Email: ${customerEmail}`)
-      console.log(`💰 Importe: ${amountTotal} ${currency}`)
-      console.log(`🆔 Session ID: ${session.id}`)
-      console.log('----------------------------------------')
+      if (!pedidoId) {
+        console.error('No se encontró pedido_id en metadata')
+        break
+      }
+
+      // Actualizar el pedido en Supabase
+      const { error } = await supabase
+        .from('pedidos')
+        .update({
+          estado_pago: 'pagado',
+          stripe_payment: session.payment_intent,
+          cliente_email: session.customer_details?.email || session.customer_email,
+        })
+        .eq('id', pedidoId)
+        .eq('estado_pago', 'pendiente') // Protección contra duplicados
+
+      if (error) {
+        console.error('Error actualizando pedido:', error)
+      } else {
+        console.log(`✅ Pedido ${pedidoId} marcado como pagado`)
+      }
 
       break
     }
-    
+
+    case 'checkout.session.expired': {
+      const session = event.data.object
+      const pedidoId = session.metadata?.pedido_id
+
+      if (pedidoId) {
+        await supabase
+          .from('pedidos')
+          .update({ estado_pago: 'cancelado' })
+          .eq('id', pedidoId)
+          .eq('estado_pago', 'pendiente')
+
+        console.log(`⏰ Pedido ${pedidoId} marcado como cancelado (sesión expirada)`)
+      }
+
+      break
+    }
+
     default:
       console.log(`Evento no manejado: ${event.type}`)
   }
